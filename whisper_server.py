@@ -1,3 +1,6 @@
+# Kitsumi Live Server - Copyright (c) 2026 Olexify. All rights reserved. Free to use, not open source.
+# Licence: https://github.com/Olexify/KitsumiLiveServer/blob/main/LICENSE - no warranty; the models and libraries it
+# runs are other people's work under their own licences (THIRD-PARTY-NOTICES.md).
 """Kitsumi live subtitles: speech-to-text on your own computer (guide: README.md beside this file).
 Speaks OpenAI's API: POST /v1/audio/transcriptions (multipart: file, language, prompt) -> { text, segments }.
 Run:  python whisper_server.py [model] [port]      no model (or "auto") = by language: Japanese gets the
