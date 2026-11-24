@@ -29,13 +29,13 @@ Kitsumi Live Server's own licence (LICENSE) does not apply to any of them.
 By installing these you accept NVIDIA's licence terms for them. If you do not, install without them: the
 server then runs on the processor.
 
-## Speech models, downloaded on the first start
+## Speech models, downloaded by the setup or on first use
 
 | Model | Publisher | Licence | Downloaded from |
 | :--- | :--- | :--- | :--- |
 | large-v3-turbo (`mobiuslabsgmbh/faster-whisper-large-v3-turbo`, a conversion of OpenAI's Whisper large-v3-turbo) | OpenAI; converted by Mobius Labs | MIT | huggingface.co |
 | small (`Systran/faster-whisper-small`, a conversion of OpenAI's Whisper small) | OpenAI; converted by SYSTRAN | MIT | huggingface.co |
-| `kotoba-tech/kotoba-whisper-v2.0-faster` (only if you choose it) | Kotoba Technologies | MIT | huggingface.co |
+| `kotoba-tech/kotoba-whisper-v2.0-faster` (for Japanese, with an NVIDIA graphics card) | Kotoba Technologies | MIT | huggingface.co |
 
 Licences are given as each publisher stated them on 2026-11-24. Any other model you start the server with
 keeps the licence its publisher gave it: check its page before you use it.

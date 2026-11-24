@@ -9,11 +9,11 @@ Nothing leaves your computer. The sound goes from your browser to this program a
 1. Download [Kitsumi-Live-Server-Setup.cmd](https://github.com/Olexify/KitsumiLiveServer/releases/latest/download/Kitsumi-Live-Server-Setup.cmd) and double-click it.
 2. Windows may say it protected your PC, because the file is new and not signed: press **More info**, then **Run anyway**.
    The file is plain text: right-click it and choose Edit to read everything it does.
-3. Choose the folder, press **Install** and wait. Python and the speech library are downloaded into that one folder
-   (about 5 GB with an NVIDIA graphics card, about 1.5 GB without). Nothing else on the computer is changed.
+3. Choose the folder and the languages you will use, press **Install** and wait. Python and the speech library are downloaded into that one folder
+   (about 3 GB plus 1.5 GB for each model with an NVIDIA graphics card, about 1.5 GB without). Nothing else on the computer is changed.
 4. Start it with the **Kitsumi live server** shortcut on the desktop, then go to **Connect Kitsumi** below.
 
-To remove it, delete the folder and the shortcut. The setup is new: if it stops, tell us on
+To remove it, run the setup again and press **Remove it from here**, or delete the folder and the shortcut. The setup is new: if it stops, tell us on
 [Discord](https://discord.gg/UpmNHxT7PF) what it said. The source is at
 [github.com/Olexify/KitsumiLiveServer](https://github.com/Olexify/KitsumiLiveServer).
 
@@ -67,18 +67,26 @@ Kitsumi sends the language you are learning, so set that first.
 
 ## Models
 
-Give the model as the first word after the file name, the port as the second:
+With an NVIDIA graphics card the server picks the model by the language Kitsumi sends:
+
+| Language | Model | Size |
+|---|---|---|
+| Japanese | `kotoba-tech/kotoba-whisper-v2.0-faster` (Japanese only, the most accurate for Japanese) | 1.5 GB |
+| Every other language | `large-v3-turbo` | 1.6 GB |
+
+One model is in memory at a time; changing the language takes a few seconds once. A model you have not
+downloaded yet is fetched on its first use, and the other one answers until it is there.
+Without a graphics card every language uses `small` (0.5 GB): the bigger models are too slow on a processor.
+
+The Windows setup asks which languages you will use and downloads only those models. Run it again to
+change the choice, or press **Remove it from here** in its window to delete the installation.
+
+To use one model for everything, name it after the file name (the port can follow):
 
 ```
 python whisper_server.py small
-python whisper_server.py kotoba-tech/kotoba-whisper-v2.0-faster 8000
+python whisper_server.py large-v3-turbo 8123
 ```
-
-| Model | Size | Good for |
-|---|---|---|
-| `large-v3-turbo` (default) | 1.6 GB | Any language, a graphics card |
-| `small` | 0.5 GB | Any language, no graphics card |
-| `kotoba-tech/kotoba-whisper-v2.0-faster` | 1.5 GB | Japanese only |
 
 To keep the models in a folder of your choice, set `WHISPER_MODELS` to that folder before starting.
 

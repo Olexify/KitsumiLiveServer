@@ -30,11 +30,25 @@ $GPU_PINS = 'nvidia-cublas-cu12==12.9.2.10', 'nvidia-cudnn-cu12==9.27.0.42'
 
 $nvidia = [bool](Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match 'NVIDIA' })
 if ($env:KITSUMI_NO_GPU) { $nvidia = $false }
-$model = if ($nvidia) { 'large-v3-turbo' } else { 'small' }
-$need = if ($nvidia) { 'about 5 GB' } else { 'about 1.5 GB' }
+$JA_MODEL = 'kotoba-tech/kotoba-whisper-v2.0-faster'
+$need = if ($nvidia) { '3 GB plus the models' } else { 'about 1.5 GB' }
+
+# Removes an installation: only the things this setup put there, and the folder itself when nothing else is left in it.
+function Remove-Install($dir, [bool]$ask) {
+  if (-not (Test-Path (Join-Path $dir 'whisper_server.py'))) { throw "There is no Kitsumi live server in '$dir'." }
+  if ($ask -and [Windows.Forms.MessageBox]::Show("Remove the Kitsumi live server from`r`n$dir`r`n`r`nPython, the speech library and the downloaded models in that folder are deleted. Close its window first if it is running.", 'Kitsumi live server', 'OKCancel', 'Warning') -ne 'OK') { return $false }
+  foreach ($n in 'venv', 'python', 'uv', 'cache', 'models', 'uv.zip', 'whisper_server.py', 'kitsumi.ico', 'Start Kitsumi live server.cmd', '__pycache__') {
+    $p = Join-Path $dir $n
+    if (Test-Path $p) { Remove-Item $p -Recurse -Force }
+  }
+  if (-not (Get-ChildItem $dir -Force)) { Remove-Item $dir -Force }
+  $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Kitsumi live server.lnk'
+  if (Test-Path $lnk) { try { if ((New-Object -ComObject WScript.Shell).CreateShortcut($lnk).TargetPath -like "$dir*") { Remove-Item $lnk -Force } } catch {} }
+  $true
+}
 
 function New-SetupForm {
-  $f = New-Object Windows.Forms.Form -Property @{ Text = 'Kitsumi live server - setup'; ClientSize = '540,306'; FormBorderStyle = 'FixedDialog'; MaximizeBox = $false; MinimizeBox = $false; StartPosition = 'CenterScreen'; Font = (New-Object Drawing.Font('Segoe UI', 9)) }
+  $f = New-Object Windows.Forms.Form -Property @{ Text = 'Kitsumi live server - setup'; ClientSize = '540,380'; FormBorderStyle = 'FixedDialog'; MaximizeBox = $false; MinimizeBox = $false; StartPosition = 'CenterScreen'; Font = (New-Object Drawing.Font('Segoe UI', 9)) }
   try { $f.Icon = New-Object Drawing.Icon (New-Object IO.MemoryStream (, [Convert]::FromBase64String($KICO.Trim()))) } catch {}   # Kitsumi's icon in the title bar
   $add = { param($type, $props) $c = New-Object "Windows.Forms.$type" -Property $props; $f.Controls.Add($c); $c }
   $card = if ($nvidia) { 'NVIDIA graphics card found: the big model, lines in under a second.' } else { 'No NVIDIA graphics card found: the small model on the processor, lines in about two seconds.' }
@@ -43,10 +57,18 @@ function New-SetupForm {
   $path = & $add TextBox @{ Location = '16,132'; Size = '412,23'; Text = (Join-Path $env:LOCALAPPDATA 'KitsumiLiveServer'); Name = 'path' }
   $browse = & $add Button @{ Location = '436,131'; Size = '88,25'; Text = 'Browse...' }
   $null = & $add Label @{ Location = '16,164'; Size = '508,54'; Text = "$card`r`nNeeds $need of free space there and an internet connection (Python and the speech library are downloaded)." }
-  $null = & $add CheckBox @{ Location = '18,224'; Size = '400,22'; Text = 'Put a shortcut on the desktop'; Checked = $true; Name = 'shortcut' }
-  $ok = & $add Button @{ Location = '340,264'; Size = '88,28'; Text = 'Install'; DialogResult = 'OK' }
-  $cancel = & $add Button @{ Location = '436,264'; Size = '88,28'; Text = 'Cancel'; DialogResult = 'Cancel' }
+  # which languages: each one is a model of its own, downloaded now (only what is ticked takes room)
+  $null = & $add Label @{ Location = '16,222'; Size = '508,18'; Text = 'Languages you will use it for:' }
+  $ja = & $add CheckBox @{ Location = '18,242'; Size = '500,22'; Text = 'Japanese - the Japanese-only model, the most accurate for Japanese (1.5 GB)'; Checked = $nvidia; Enabled = $nvidia; Name = 'ja' }
+  $other = & $add CheckBox @{ Location = '18,266'; Size = '500,22'; Text = $(if ($nvidia) { 'Other languages - the general model (1.6 GB)' } else { 'Every language - the small model (0.5 GB); the others need an NVIDIA graphics card' }); Checked = $true; Enabled = $nvidia; Name = 'other' }
+  $null = & $add CheckBox @{ Location = '18,298'; Size = '400,22'; Text = 'Put a shortcut on the desktop'; Checked = $true; Name = 'shortcut' }
+  $remove = & $add Button @{ Location = '16,338'; Size = '150,28'; Text = 'Remove it from here'; DialogResult = 'Abort'; Name = 'remove' }
+  $ok = & $add Button @{ Location = '340,338'; Size = '88,28'; Text = 'Install'; DialogResult = 'OK' }
+  $cancel = & $add Button @{ Location = '436,338'; Size = '88,28'; Text = 'Cancel'; DialogResult = 'Cancel' }
   $f.AcceptButton = $ok; $f.CancelButton = $cancel
+  # Remove shows only where an installation is; with one there, Install reads "Update"
+  $sync = { $has = Test-Path (Join-Path $path.Text.Trim().Trim('"') 'whisper_server.py'); $remove.Visible = $has; $ok.Text = $(if ($has) { 'Update' } else { 'Install' }) }
+  $path.Add_TextChanged($sync); & $sync
   $browse.Add_Click({
     $d = New-Object Windows.Forms.FolderBrowserDialog -Property @{ Description = 'A folder named KitsumiLiveServer is made inside the one you pick.'; ShowNewFolderButton = $true }
     if ($d.ShowDialog() -eq 'OK') { $path.Text = Join-Path $d.SelectedPath 'KitsumiLiveServer' }
@@ -62,18 +84,35 @@ function Run-Step($what, [scriptblock]$do) {
 
 # --- main ---
 try {
-  $shortcut = $true
-  if ($env:KITSUMI_DIR) { $dir = $env:KITSUMI_DIR; $shortcut = $false }   # no questions: for tests
-  else {
+  $shortcut = $true; $wantJa = $nvidia; $wantOther = $true; $act = 'OK'
+  if ($env:KITSUMI_DIR) {   # no questions: for tests (KITSUMI_LANGS = ja / other / both, KITSUMI_REMOVE = remove instead)
+    $dir = $env:KITSUMI_DIR; $shortcut = $false
+    if ($env:KITSUMI_LANGS -eq 'ja') { $wantOther = $false } elseif ($env:KITSUMI_LANGS -eq 'other') { $wantJa = $false }
+    if ($env:KITSUMI_REMOVE) { $act = 'Abort' }
+  } else {
     $form = New-SetupForm
-    if ($form.ShowDialog() -ne 'OK') { exit 0 }
+    $act = [string]$form.ShowDialog()
+    if ($act -ne 'OK' -and $act -ne 'Abort') { exit 0 }
     $dir = $form.Controls['path'].Text.Trim().Trim('"'); $shortcut = $form.Controls['shortcut'].Checked
+    $wantJa = $form.Controls['ja'].Checked; $wantOther = $form.Controls['other'].Checked
   }
   if (-not $dir -or -not [IO.Path]::IsPathRooted($dir)) { throw "That is not a full folder path: '$dir'" }
   $dir = [IO.Path]::GetFullPath($dir)
+  if ($act -eq 'Abort') {
+    if (Remove-Install $dir (-not $env:KITSUMI_DIR)) {
+      Write-Host "Removed from $dir" -ForegroundColor Green
+      if (-not $env:KITSUMI_DIR) { $null = [Windows.Forms.MessageBox]::Show("The Kitsumi live server was removed from`r`n$dir", 'Kitsumi live server', 'OK', 'Information') }
+    }
+    exit 0
+  }
+  if (-not $nvidia) { $wantJa = $false; $wantOther = $true }
+  if (-not $wantJa -and -not $wantOther) { $wantJa = $true; $wantOther = $true }   # nothing ticked = both
+  # the model the Start file names: one language group = that model, both = by the language Kitsumi sends
+  $model = if (-not $nvidia) { 'small' } elseif ($wantJa -and $wantOther) { 'auto' } elseif ($wantJa) { $JA_MODEL } else { 'large-v3-turbo' }
+  $models = @(); if (-not $nvidia) { $models += 'small' } else { if ($wantOther) { $models += 'large-v3-turbo' }; if ($wantJa) { $models += $JA_MODEL } }
   $null = New-Item -ItemType Directory -Force $dir
   # room on that drive, asked before anything is downloaded
-  $needGB = if ($nvidia) { 6 } else { 2 }
+  $needGB = if ($nvidia) { 3 + 2 * $models.Count } else { 2 }
   $freeGB = try { [math]::Floor((New-Object IO.DriveInfo ([IO.Path]::GetPathRoot($dir))).AvailableFreeSpace / 1GB) } catch { 999 }
   if ($freeGB -lt $needGB) { throw "Not enough room on that drive: $freeGB GB free, about $needGB GB needed. Choose a folder on another drive." }
   Write-Host "Installing into $dir"
@@ -101,6 +140,14 @@ try {
   $pkgs = if ($nvidia) { $PINS + $GPU_PINS } else { $PINS }
   Run-Step 'Installing the speech library (the long step)' { & $uv pip install --python $py @pkgs }
   Remove-Item $env:UV_CACHE_DIR -Recurse -Force -ErrorAction SilentlyContinue
+  # the chosen models now, so the first start is quick; one that fails here is downloaded on its first use instead
+  $env:PYTHONUTF8 = '1'; $env:KITSUMI_MODELS = Join-Path $dir 'models'
+  foreach ($m in $models) {
+    Write-Host "`n== Downloading the speech model $m" -ForegroundColor Cyan
+    $env:KITSUMI_M = $m
+    if (-not $env:KITSUMI_UV) { & $py -c "import os; from faster_whisper.utils import download_model; download_model(os.environ['KITSUMI_M'], cache_dir=os.environ['KITSUMI_MODELS'])" }
+    if ($LASTEXITCODE) { Write-Host "   not downloaded now - it will be on its first use." -ForegroundColor Yellow; $LASTEXITCODE = 0 }
+  }
 
   $start = Join-Path $dir 'Start Kitsumi live server.cmd'
   [IO.File]::WriteAllText($start, "@echo off`r`ntitle Kitsumi live server`r`nrem In Kitsumi: Local - Live generate on this page - Your own server, address http://localhost:8000/v1, no key.`r`nset PYTHONUTF8=1`r`nset `"WHISPER_MODELS=%~dp0models`"`r`n`"%~dp0venv\Scripts\python.exe`" `"%~dp0whisper_server.py`" $model`r`npause`r`n", [Text.Encoding]::ASCII)
@@ -112,8 +159,7 @@ try {
   }
   Write-Host "`nDone. Start it with: $start" -ForegroundColor Green
   if (-not $env:KITSUMI_DIR) {
-    $size = if ($nvidia) { '1.6 GB' } else { '0.5 GB' }
-    $go = [Windows.Forms.MessageBox]::Show("Installed.`r`n`r`nStart it now? The first start downloads the speech model ($size); after that it starts in seconds.`r`n`r`nThen in Kitsumi: Local - Live generate on this page - Your own server, address http://localhost:8000/v1, key empty.", 'Kitsumi live server', 'YesNo', 'Information')
+    $go = [Windows.Forms.MessageBox]::Show("Installed.`r`n`r`nStart it now?`r`n`r`nThen in Kitsumi: Local - Live generate on this page - Your own server, address http://localhost:8000/v1, key empty.", 'Kitsumi live server', 'YesNo', 'Information')
     if ($go -eq 'Yes') { Start-Process $start -WorkingDirectory $dir }
   }
   exit 0
@@ -127,10 +173,11 @@ AAABAAMAEBAAAAAAIAAoBAAANgAAACAgAAAAACAAKBAAAF4EAAAwMAAAAAAgACgkAACGFAAAKAAAABAA
 ::KITSUMI-PY::
 """Kitsumi live subtitles: speech-to-text on your own computer (guide: README.md beside this file).
 Speaks OpenAI's API: POST /v1/audio/transcriptions (multipart: file, language, prompt) -> { text, segments }.
-Run:  python whisper_server.py [model] [port]      default: large-v3-turbo on port 8000
+Run:  python whisper_server.py [model] [port]      no model (or "auto") = by language: Japanese gets the
+      Japanese-only model on a graphics card, everything else large-v3-turbo (small on a processor); port 8000
 In Kitsumi: Local -> Live generate on this page -> Your own server, address http://localhost:8000/v1, no key.
 Only this computer can reach it (127.0.0.1). Models are kept in the folder WHISPER_MODELS names, else the usual cache."""
-import glob, io, json, os, subprocess, sys, time, wave
+import gc, glob, io, json, os, subprocess, sys, threading, time, wave
 from email.parser import BytesParser
 from email.policy import HTTP
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -142,24 +189,75 @@ for d in glob.glob(os.path.join(sys.prefix, "Lib", "site-packages", "nvidia", "*
     os.environ["PATH"] = d + os.pathsep + os.environ["PATH"]
 
 from faster_whisper import WhisperModel
+from faster_whisper.utils import download_model
 
-MODEL = sys.argv[1] if len(sys.argv) > 1 else "large-v3-turbo"
+# The model: named on the command line = that one, always. Otherwise it follows the language Kitsumi sends:
+# Japanese gets the Japanese-only model (better on Japanese; graphics card only - it is too heavy for a processor),
+# everything else the general one. One model is in memory at a time, swapped when the language changes.
+FIXED = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] != "auto" else ""
 PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8000
 ROOT = os.environ.get("WHISPER_MODELS") or None
+JA_MODEL = "kotoba-tech/kotoba-whisper-v2.0-faster"
 
 
-def load():
+def load(name):
     """The graphics card when it works (a 1 s test run tells), else the processor."""
     try:
-        m = WhisperModel(MODEL, device="cuda", compute_type="float16", download_root=ROOT)
+        m = WhisperModel(name or "large-v3-turbo", device="cuda", compute_type="float16", download_root=ROOT)
         list(m.transcribe(np.zeros(16000, np.float32), language="en")[0])
-        return m, "graphics card"
+        return m, name or "large-v3-turbo", "graphics card"
     except Exception as e:
         print(f"No usable NVIDIA graphics card ({str(e)[:120]}) - using the processor, slower.", flush=True)
-        return WhisperModel(MODEL, device="cpu", compute_type="int8", download_root=ROOT), "processor"
+        return WhisperModel(name or "small", device="cpu", compute_type="int8", download_root=ROOT), name or "small", "processor"
 
 
-model, DEVICE = load()
+model, MODEL, DEVICE = load(FIXED)
+GENERAL = MODEL
+ja = {"state": "no"}  # no / loading (being downloaded) / ready / failed
+
+
+def ja_fetch():
+    try:
+        download_model(JA_MODEL, cache_dir=ROOT)
+        ja["state"] = "ready"
+        print("The Japanese model is ready: Japanese lines use it from now on.", flush=True)
+    except Exception as e:
+        ja["state"] = "failed"
+        print(f"The Japanese model could not be downloaded ({str(e)[:120]}) - Japanese stays on {GENERAL}.", flush=True)
+
+
+def model_for(lang):
+    """Swaps the model in memory to the one for this language (only without a fixed model, on a graphics card)."""
+    global model, MODEL
+    if FIXED or DEVICE != "graphics card":
+        return model
+    want = GENERAL
+    if lang == "ja":
+        if ja["state"] == "no":
+            try:
+                download_model(JA_MODEL, cache_dir=ROOT, local_files_only=True)  # already on disk?
+                ja["state"] = "ready"
+            except Exception:
+                ja["state"] = "loading"
+                print(f"Downloading the Japanese model ({JA_MODEL}, 1.5 GB) - until it is here Japanese uses {GENERAL}.", flush=True)
+                threading.Thread(target=ja_fetch, daemon=True).start()
+        if ja["state"] == "ready":
+            want = JA_MODEL
+    if want != MODEL:
+        t = time.time()
+        model = None
+        gc.collect()  # the old one leaves the graphics card's memory first
+        try:
+            model = WhisperModel(want, device="cuda", compute_type="float16", download_root=ROOT)
+            MODEL = want
+        except Exception as e:  # it must keep answering
+            print(f"Could not load {want} ({str(e)[:120]}) - back to {GENERAL}.", flush=True)
+            if want == JA_MODEL:
+                ja["state"] = "failed"
+            model = WhisperModel(GENERAL, device="cuda", compute_type="float16", download_root=ROOT)
+            MODEL = GENERAL
+        print(f"Model for this language: {MODEL} ({time.time() - t:.1f} s to switch)", flush=True)
+    return model
 
 
 def pcm16k(data):
@@ -187,7 +285,7 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        self.reply(200, {"ok": True, "model": MODEL, "device": DEVICE})
+        self.reply(200, {"ok": True, "model": MODEL, "device": DEVICE, "byLanguage": not FIXED and DEVICE == "graphics card", "japanese": ja["state"]})
 
     def do_POST(self):
         # A web page must not make this computer transcribe. Every browser names the caller in Origin on a POST from a
@@ -210,7 +308,7 @@ class H(BaseHTTPRequestHandler):
         t0 = time.time()
         try:
             audio = pcm16k(f["file"])
-            segs, _ = model.transcribe(audio, language=text("language") or None, initial_prompt=text("prompt") or None,
+            segs, _ = model_for(text("language")).transcribe(audio, language=text("language") or None, initial_prompt=text("prompt") or None,
                                        condition_on_previous_text=False, vad_filter=True, temperature=0)
             segs = [{"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip(), "avg_logprob": s.avg_logprob,
                      "compression_ratio": s.compression_ratio, "no_speech_prob": s.no_speech_prob} for s in segs]
@@ -224,5 +322,5 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"Kitsumi whisper server: http://localhost:{PORT}/v1  model {MODEL} on the {DEVICE}  (Ctrl+C stops it)", flush=True)
+    print(f"Kitsumi whisper server: http://localhost:{PORT}/v1  model {MODEL if FIXED or DEVICE != "graphics card" else MODEL + " (Japanese: " + JA_MODEL + ")"} on the {DEVICE}  (Ctrl+C stops it)", flush=True)
     HTTPServer(("127.0.0.1", PORT), H).serve_forever()  # one request at a time: the GPU does one anyway
