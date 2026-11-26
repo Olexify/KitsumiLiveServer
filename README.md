@@ -109,9 +109,14 @@ A machine-made track has mistakes: say in the upload that it was made by AI.
 - **Lines are slow or late**: use a smaller model, or in Kitsumi set the pace to "In bigger pieces".
 - **Port 8000 is taken**: start with another port (`python whisper_server.py large-v3-turbo 8123`) and use it
   in the address.
-- **A server somewhere else** (Modal, Colab, a home server): Kitsumi works with any address that speaks
-  OpenAI's transcription API (`POST <address>/audio/transcriptions`). Put its address and key in the same fields.
-  Then the sound of your video goes to that server.
+- **A server on another computer** (a home server, a rented graphics card): on its own the server answers only
+  on `localhost`. To reach it from elsewhere, start it with a key of your choice (16+ random characters) in `KITSUMI_KEY`
+  (`KITSUMI_KEY=long-random-text python whisper_server.py`), put it behind HTTPS (a tunnel such as Cloudflare
+  Tunnel, or your own proxy), and in Kitsumi enter that address with `/v1` at the end and the same key in the key
+  field. Every request without the key is refused. The sound of your video then goes to that computer.
+  Google Colab's free tier does not allow running a web service through a tunnel, so we don't recommend it.
+  Kitsumi also works with any other service that speaks OpenAI's transcription API
+  (`POST <address>/audio/transcriptions`).
 
 ## Credits and licences
 

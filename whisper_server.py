@@ -6,8 +6,9 @@ Speaks OpenAI's API: POST /v1/audio/transcriptions (multipart: file, language, p
 Run:  python whisper_server.py [model] [port]      no model (or "auto") = by language: Japanese gets the
       Japanese-only model on a graphics card, everything else large-v3-turbo (small on a processor); port 8000
 In Kitsumi: Local -> Live generate on this page -> Your own server, address http://localhost:8000/v1, no key.
-Only this computer can reach it (127.0.0.1). Models are kept in the folder WHISPER_MODELS names, else the usual cache."""
-import gc, glob, io, json, os, subprocess, sys, threading, time, wave
+Only this computer can reach it (127.0.0.1) - unless KITSUMI_KEY is set: then a tunnel (Colab, a home server)
+may bring other addresses in, and every request must carry that key (Kitsumi: the key field). Models are kept in the folder WHISPER_MODELS names, else the usual cache."""
+import gc, glob, hmac, io, json, os, subprocess, sys, threading, time, wave
 from email.parser import BytesParser
 from email.policy import HTTP
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -28,6 +29,10 @@ FIXED = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] != "auto" else ""
 PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8000
 ROOT = os.environ.get("WHISPER_MODELS") or None
 JA_MODEL = "kotoba-tech/kotoba-whisper-v2.0-faster"
+# Behind a tunnel the address is the tunnel's, not localhost: with a key set, the key decides instead of the address.
+KEY = (os.environ.get("KITSUMI_KEY") or "").strip()
+if KEY and len(KEY) < 16:  # a short key can be guessed by trying; the server has no limit on attempts
+    sys.exit("KITSUMI_KEY is too short: use at least 16 random characters")
 
 
 def load(name):
@@ -122,8 +127,13 @@ class H(BaseHTTPRequestHandler):
         # page ("null" for a sandboxed one): only extensions pass, and local tools, which send none. The Host check
         # stops a site that points its own name at 127.0.0.1.
         origin, host = self.headers.get("Origin"), (self.headers.get("Host") or "").rsplit(":", 1)[0]
-        if host not in ("localhost", "127.0.0.1") or not (origin is None or origin.startswith(("moz-extension://", "chrome-extension://"))):
+        if not (origin is None or origin.startswith(("moz-extension://", "chrome-extension://"))):
             return self.reply(403, {"error": "only Kitsumi and programs on this computer may call this server"})
+        if KEY:  # remote mode: the key, compared in constant time; any address (the tunnel's name)
+            if not hmac.compare_digest((self.headers.get("Authorization") or "").encode(), ("Bearer " + KEY).encode()):
+                return self.reply(401, {"error": "wrong or missing key - put the server's KITSUMI_KEY in Kitsumi's key field"})
+        elif host not in ("localhost", "127.0.0.1"):
+            return self.reply(403, {"error": "this server answers only on localhost - for a tunnel (Colab), start it with KITSUMI_KEY set"})
         if not self.path.rstrip("/").endswith("/audio/transcriptions"):
             return self.reply(404, {"error": "POST /v1/audio/transcriptions"})
         n = int(self.headers.get("Content-Length") or 0)
@@ -152,5 +162,5 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"Kitsumi whisper server: http://localhost:{PORT}/v1  model {MODEL if FIXED or DEVICE != "graphics card" else MODEL + " (Japanese: " + JA_MODEL + ")"} on the {DEVICE}  (Ctrl+C stops it)", flush=True)
+    print(f"Kitsumi whisper server: http://localhost:{PORT}/v1  model {MODEL if FIXED or DEVICE != "graphics card" else MODEL + " (Japanese: " + JA_MODEL + ")"} on the {DEVICE}  (Ctrl+C stops it)" + ("  - key required (KITSUMI_KEY)" if KEY else ""), flush=True)
     HTTPServer(("127.0.0.1", PORT), H).serve_forever()  # one request at a time: the GPU does one anyway
